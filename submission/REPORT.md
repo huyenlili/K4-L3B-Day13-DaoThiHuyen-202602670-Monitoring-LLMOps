@@ -29,7 +29,8 @@
 | Trace waterfall | ![alt text](image-8.png) |
 | Trace metadata | ![alt text](image-11.png) ![alt text](image-12.png) |
 | Prompt versions | submission\evidence\image-13.png |
-| Prompt rollback | submission\evidence\image-14.png|
+| Prompt rollback | submission\evidence\image-14.png
+![alt text](image.png)|
 | Dashboard runtime | submission\evidence\image-15.png |
 | Incident metric | submission\evidence\image-16.png |
 | Incident log | submission\evidence\image-17.png |
