@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from functools import wraps
 from typing import Any
 
 try:
@@ -13,7 +14,11 @@ except ImportError:  # pragma: no cover - chỉ dùng khi chưa cài requirement
 
     def observe(*args: Any, **kwargs: Any):
         def decorator(func):
-            return func
+            @wraps(func)
+            def wrapper(*func_args: Any, **func_kwargs: Any):
+                return func(*func_args, **func_kwargs)
+
+            return wrapper
 
         return decorator
 
@@ -38,5 +43,6 @@ def get_langfuse_client():
 
 def tracing_enabled() -> bool:
     return LANGFUSE_SDK_AVAILABLE and bool(
-        os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")
+        os.getenv("LANGFUSE_PUBLIC_KEY")
+        and os.getenv("LANGFUSE_SECRET_KEY")
     )

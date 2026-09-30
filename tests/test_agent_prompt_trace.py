@@ -15,7 +15,7 @@ class ManagedPrompt:
             f"Question={variables['message']}"
         )
 
-
+ 
 class RecordingLangfuseClient:
     def __init__(self) -> None:
         self.prompt = ManagedPrompt()

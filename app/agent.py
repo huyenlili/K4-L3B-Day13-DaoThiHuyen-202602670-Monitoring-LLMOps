@@ -9,7 +9,12 @@ from .mock_llm import FakeLLM
 from .mock_rag import retrieve
 from .pii import hash_user_id, summarize_text
 from .prompt_management import resolve_prompt
-from .tracing import get_langfuse_client, observe, propagate_attributes, tracing_enabled
+from .tracing import (
+    get_langfuse_client,
+    observe,
+    propagate_attributes,
+    tracing_enabled,
+)
 
 
 @dataclass
@@ -28,7 +33,12 @@ class LabAgent:
         self.model = model
         self.llm = FakeLLM(model=model)
 
-    @observe(name="lab-agent-run", as_type="agent", capture_input=False, capture_output=False)
+    @observe(
+        name="lab-agent-run",
+        as_type="agent",
+        capture_input=False,
+        capture_output=False,
+    )
     def run(
         self,
         user_id: str,
@@ -38,6 +48,7 @@ class LabAgent:
         correlation_id: str,
     ) -> AgentResult:
         langfuse_client = get_langfuse_client()
+
         with propagate_attributes(
             user_id=hash_user_id(user_id),
             session_id=session_id,
@@ -51,7 +62,17 @@ class LabAgent:
             },
         ):
             started = time.perf_counter()
+
+            # ---------------------------------------------------------
+            # 1. Retrieval
+            # ---------------------------------------------------------
+            # retrieve() must be decorated with:
+            # @observe(name="retrieval", as_type="span")
             docs = retrieve(message)
+
+            # ---------------------------------------------------------
+            # 2. Resolve managed prompt from Langfuse
+            # ---------------------------------------------------------
             prompt = resolve_prompt(
                 langfuse_client,
                 feature=feature,
@@ -59,25 +80,54 @@ class LabAgent:
                 message=message,
                 enabled=tracing_enabled(),
             )
+
+            # Record prompt metadata on the current lab-agent-run
             langfuse_client.update_current_span(
                 metadata={
                     "doc_count": len(docs),
                     "query_preview": summarize_text(message),
                     "prompt_name": prompt.name,
                     "prompt_label": prompt.label,
-                    "prompt_version": prompt.version,
+                    "prompt_version": str(prompt.version),
                     "prompt_source": prompt.source,
                     "prompt_fetch_error": prompt.fetch_error or "",
                 },
-                version=prompt.version,
+                version=str(prompt.version),
             )
-            # TODO (CP2): instrument retrieve() and FakeLLM.generate() as child
-            # observations. The nested generation must receive prompt, usage and cost.
-            with propagate_attributes(prompt=prompt.managed_prompt):
+
+            # ---------------------------------------------------------
+            # 3. Generation
+            # ---------------------------------------------------------
+            # IMPORTANT:
+            # Pass the Langfuse managed prompt OBJECT through
+            # propagate_attributes(prompt=...).
+            #
+            # Do NOT pass the compiled/raw prompt here.
+            #
+            # FakeLLM.generate() must be decorated with:
+            # @observe(name="generation", as_type="generation")
+            with propagate_attributes(
+                prompt=prompt.managed_prompt,
+            ):
                 response = self.llm.generate(prompt.text)
-            quality_score = self._heuristic_quality(message, response.text, docs)
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            cost_usd = self._estimate_cost(response.usage.input_tokens, response.usage.output_tokens)
+
+            # ---------------------------------------------------------
+            # 4. Quality + metrics
+            # ---------------------------------------------------------
+            quality_score = self._heuristic_quality(
+                message,
+                response.text,
+                docs,
+            )
+
+            latency_ms = int(
+                (time.perf_counter() - started) * 1000
+            )
+
+            cost_usd = self._estimate_cost(
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+            )
 
         metrics.record_request(
             latency_ms=latency_ms,
@@ -98,19 +148,44 @@ class LabAgent:
             quality_score=quality_score,
         )
 
-    def _estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
+    def _estimate_cost(
+        self,
+        tokens_in: int,
+        tokens_out: int,
+    ) -> float:
         input_cost = (tokens_in / 1_000_000) * 3
         output_cost = (tokens_out / 1_000_000) * 15
+
         return round(input_cost + output_cost, 6)
 
-    def _heuristic_quality(self, question: str, answer: str, docs: list[str]) -> float:
+    def _heuristic_quality(
+        self,
+        question: str,
+        answer: str,
+        docs: list[str],
+    ) -> float:
         score = 0.5
+
         if docs:
             score += 0.2
+
         if len(answer) > 40:
             score += 0.1
-        if question.lower().split()[0:1] and any(token in answer.lower() for token in question.lower().split()[:3]):
+
+        if (
+            question.lower().split()[0:1]
+            and any(
+                token in answer.lower()
+                for token in question.lower().split()[:3]
+            )
+        ):
             score += 0.1
+
         if "[REDACTED" in answer:
             score -= 0.2
-        return round(max(0.0, min(1.0, score)), 2)
+
+        return round(
+            max(0.0, min(1.0, score)),
+            2,
+        )
+
